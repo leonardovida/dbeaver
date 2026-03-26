@@ -167,7 +167,7 @@ public abstract class JDBCDataSource extends AbstractDataSource
             try {
                 DBAAuthCredentials credentials = authModel.loadCredentials(container, connectionInfo);
 
-                if (REFRESH_CREDENTIALS_ON_CONNECT) {
+                if (credentials.needRefreshCredentialsOnConnect()) {
                     // Refresh credentials
                     authModel.refreshCredentials(monitor, container, connectionInfo, credentials);
                 }
@@ -920,4 +920,7 @@ public abstract class JDBCDataSource extends AbstractDataSource
         this.tempFiles.add(file);
     }
 
+    protected boolean needRefreshCredentialsOnConnect() {
+        return REFRESH_CREDENTIALS_ON_CONNECT;
+    }
 }
