@@ -272,6 +272,7 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
         @NotNull CLIContextImpl context,
         @NotNull CLIRunMeta runMeta
     ) {
+        var init = System.currentTimeMillis();
         AbstractTopLevelCommand topLevelImp = createTopLevelCommand(applicationInstanceController, context, runMeta);
         var topLevel = new CommandLine(topLevelImp);
         topLevel.setExecutionStrategy(new CommandLine.RunAll());
@@ -279,19 +280,24 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
         topLevel.setExecutionExceptionHandler(exceptionHandler);
         transformCommand(topLevel.getCommandSpec(), topLevelImp.getClass());
         for (CLICommandDescriptor param : commands.values()) {
+            var loadParam = System.currentTimeMillis();
             if (param.getImplClass().getAnnotation(CommandLine.Command.class) == null) {
                 log.warn("Class is not annotated '" + param.getImplClass().getName() + "'");
                 continue;
             }
+            var parseAsCmd = System.currentTimeMillis();
             CommandLine command = new CommandLine(param.getImplClass());
             transformCommand(command.getCommandSpec(), param.getImplClass());
+            System.out.println("Parse command " + param.getImplClass().getName() + " time: " + (System.currentTimeMillis() - parseAsCmd) + "ms");
             topLevel.addSubcommand(command);
+            System.out.println("Load param " + param.getImplClass().getName() + " time: " + (System.currentTimeMillis() - loadParam) + "ms");
         }
         // call after adding subcommands, because global transformers can affect all command tree
         for (CLITransformerDescriptor transformer : globalTransformers) {
             transformer.getTransformer().transform(topLevel.getCommandSpec());
         }
         topLevel.setHelpFactory(new CLIHelpFactory());
+        System.out.println("Init total:" + (System.currentTimeMillis() - init) + "ms");
         return topLevel;
     }
 
