@@ -29,6 +29,7 @@ import org.jkiss.dbeaver.model.cli.model.NonExecutableOption;
 import org.jkiss.dbeaver.model.cli.registry.CLICommandDescriptor;
 import org.jkiss.dbeaver.model.cli.registry.CLITransformerDescriptor;
 import org.jkiss.dbeaver.utils.GeneralUtils;
+import org.jkiss.utils.ArrayUtils;
 import org.jkiss.utils.CommonUtils;
 import picocli.CommandLine;
 
@@ -107,11 +108,13 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
     ) throws Exception {
         log.trace("Executing command line: " + String.join(" ", args));
         CLIProcessResult result;
+        List<CLICommandDescriptor> commandsToExecute = extractCommandsToExecuteFromArgs(args);
         try (var context = new CLIContextImpl(controller)) {
             CommandLine commandLine = initCommandLine(
                 controller,
                 context,
-                new CLIRunMeta(uiActivated, supportNewInstance)
+                new CLIRunMeta(uiActivated, supportNewInstance),
+                commandsToExecute
             );
             CommandLine.ParseResult parseResult;
             try {
@@ -139,7 +142,11 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
             }
 
             if (commandLineIsEmpty(parseResult)) {
-                return new CLIProcessResult(CLIProcessResult.PostAction.START_INSTANCE);
+                String[] defaultArgs = getDefaultArgs();
+                if (ArrayUtils.isEmpty(defaultArgs)) {
+                    return new CLIProcessResult(CLIProcessResult.PostAction.START_INSTANCE);
+                }
+
             }
             validateCommandLineParameters(parseResult);
 
@@ -157,7 +164,7 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
                 return new CLIProcessResult(CLIProcessResult.PostAction.SHUTDOWN, version);
             }
 
-            for (CLICommandDescriptor descriptor : commands.values()) {
+            for (CLICommandDescriptor descriptor : commandsToExecute) {
                 CommandLine.ParseResult cliCommand = findCommand(parseResult, descriptor.getImplClass());
                 if (cliCommand == null) {
                     continue;
@@ -206,6 +213,22 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
         return result;
     }
 
+    @NotNull
+    private static List<CLICommandDescriptor> extractCommandsToExecuteFromArgs(@NotNull String[] args) {
+//        Map<String, CLICommandDescriptor> commandsByName = commands
+//            .entrySet()
+//            .stream()
+//            .collect(Collectors.toMap(entry -> entry.getValue().getCommandName(), Map.Entry::getValue));
+
+        List<CLICommandDescriptor> commandsToExecute = new ArrayList<>();
+//        for (String arg : args) {
+//            if (commandsByName.containsKey(arg)) {
+//                commandsToExecute.add(commandsByName.get(arg));
+//            }
+//        }
+        return commands.values().stream().toList();
+    }
+
     private static CommandLine.Model.CommandSpec findCommandForHelp(
         @NotNull CommandLine.ParseResult parseResult
     ) {
@@ -226,41 +249,19 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
     }
 
     @NotNull
-    public String[] preprocessCommandLine(@NotNull String[] args) throws DBException {
-        try (var context = new CLIContextImpl(null)) {
-            CommandLine commandLine = initCommandLine(
-                null,
-                context,
-                new CLIRunMeta(false, false)
+    public void preprocessCommandLine(
+        @NotNull String[] args
+    ) throws DBException {
+        for (CLICommandDescriptor descriptor : extractCommandsToExecuteFromArgs(args)) {
+            preprocessCommandLineParameter(
+                descriptor,
+                false
             );
-            commandLine.setUnmatchedArgumentsAllowed(true);
-            CommandLine.ParseResult parseResult;
-            parseResult = commandLine.parseArgs(args);
-            if (commandLineIsEmpty(parseResult)) {
-                return new String[0];
-            }
-            for (CLICommandDescriptor descriptor : commands.values()) {
-                CommandLine.ParseResult cliCommand = findCommand(parseResult, descriptor.getImplClass());
-                if (cliCommand == null) {
-                    continue;
-                }
-                preprocessCommandLineParameter(
-                    descriptor,
-                    cliCommand,
-                    context,
-                    false
-                );
-            }
-        } catch (Exception e) {
-            log.error("Error preprocessing command line: " + e.getMessage(), e);
         }
-        return args;
     }
 
     protected void preprocessCommandLineParameter(
         @NotNull CLICommandDescriptor descriptor,
-        @NotNull CommandLine.ParseResult cliCommand,
-        @NotNull CLIContextImpl context,
         boolean uiActivated
     ) {
 
@@ -270,7 +271,8 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
     protected CommandLine initCommandLine(
         @Nullable T applicationInstanceController,
         @NotNull CLIContextImpl context,
-        @NotNull CLIRunMeta runMeta
+        @NotNull CLIRunMeta runMeta,
+        @NotNull List<CLICommandDescriptor> commandsToExecute
     ) {
         var init = System.currentTimeMillis();
         AbstractTopLevelCommand topLevelImp = createTopLevelCommand(applicationInstanceController, context, runMeta);
@@ -279,18 +281,28 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
         ExceptionHandler exceptionHandler = new ExceptionHandler();
         topLevel.setExecutionExceptionHandler(exceptionHandler);
         transformCommand(topLevel.getCommandSpec(), topLevelImp.getClass());
-        for (CLICommandDescriptor param : commands.values()) {
+        for (CLICommandDescriptor commandDescriptor : commandsToExecute) {
             var loadParam = System.currentTimeMillis();
-            if (param.getImplClass().getAnnotation(CommandLine.Command.class) == null) {
-                log.warn("Class is not annotated '" + param.getImplClass().getName() + "'");
+            if (commandDescriptor.getImplClass().getAnnotation(CommandLine.Command.class) == null) {
+                log.warn("Class is not annotated '" + commandDescriptor.getImplClass().getName() + "'");
                 continue;
             }
+
+
+            var getImpl = System.currentTimeMillis();
+            var implClass = commandDescriptor.getImplClass();
+            System.out.println("Get impl class: " + implClass.getName() + " time: " + (System.currentTimeMillis() - getImpl) + "ms");
+
             var parseAsCmd = System.currentTimeMillis();
-            CommandLine command = new CommandLine(param.getImplClass());
-            transformCommand(command.getCommandSpec(), param.getImplClass());
-            System.out.println("Parse command " + param.getImplClass().getName() + " time: " + (System.currentTimeMillis() - parseAsCmd) + "ms");
+            CommandLine command = new CommandLine(implClass);
+            System.out.println("picocli command parsing: " + commandDescriptor.getImplClass().getName() + " time: " + (System.currentTimeMillis() - parseAsCmd) + "ms");
+
+            var transformms = System.currentTimeMillis();
+            transformCommand(command.getCommandSpec(), commandDescriptor.getImplClass());
+            System.out.println("transform ms : " + commandDescriptor.getImplClass().getName() + " time: " + (System.currentTimeMillis() - transformms) + "ms");
+
             topLevel.addSubcommand(command);
-            System.out.println("Load param " + param.getImplClass().getName() + " time: " + (System.currentTimeMillis() - loadParam) + "ms");
+            System.out.println("Load param " + commandDescriptor.getImplClass().getName() + " time: " + (System.currentTimeMillis() - loadParam) + "ms");
         }
         // call after adding subcommands, because global transformers can affect all command tree
         for (CLITransformerDescriptor transformer : globalTransformers) {
@@ -349,5 +361,10 @@ public abstract class ApplicationCommandLine<T extends ApplicationInstanceContro
             }
         }
         return null;
+    }
+
+    @NotNull
+    protected String[] getDefaultArgs() {
+        return new String[0];
     }
 }
